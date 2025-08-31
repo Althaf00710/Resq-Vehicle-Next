@@ -8,3 +8,18 @@ export const HANDLE_RESCUE_VEHICLE_LOCATION = gql`
     }
   }
 `;
+
+export const LOGIN_RESCUE_VEHICLE = gql`
+  mutation LoginRescueVehicle($plateNumber: String!, $password: String!) {
+    loginRescueVehicle(plateNumber: $plateNumber, password: $password) {
+      success
+      message
+      rescueVehicle {
+        id
+        code
+        plateNumber
+        rescueVehicleCategory { name }
+      }
+    }
+  }
+`;

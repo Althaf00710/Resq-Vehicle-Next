@@ -1,84 +1,207 @@
 'use client'
-import { useRef, useState, useCallback } from 'react'
+import { useRef, useState, useCallback, useEffect } from 'react'
 import Script from 'next/script'
 import { useMutation } from '@apollo/client'
 import { HANDLE_RESCUE_VEHICLE_LOCATION } from '@/graphql/mutations/rescueVehicleMutations'
 
 interface LiveLocationMapProps {
-  rescueVehicleId: number;
+  rescueVehicleId: number
+  offer?: { lat: number; lng: number } | null  // destination (when offer active)
+  active?: boolean                              // whether to show route/destination
 }
 
-export default function LiveLocationMap({ rescueVehicleId }: LiveLocationMapProps) {
+export default function LiveLocationMap({ rescueVehicleId, offer = null, active = false }: LiveLocationMapProps) {
   const mapEl = useRef<HTMLDivElement | null>(null)
   const markerRef = useRef<google.maps.Marker | null>(null)
+  const destMarkerRef = useRef<google.maps.Marker | null>(null)
   const mapInstance = useRef<google.maps.Map | null>(null)
 
-  // track live
+  const directionsServiceRef = useRef<google.maps.DirectionsService | null>(null)
+  const directionsRendererRef = useRef<google.maps.DirectionsRenderer | null>(null)
+
+  // keep refs for cleanup
+  const watchIdRef = useRef<number | null>(null)
+  const intervalIdRef = useRef<number | null>(null)
+
+  // latest known coords (for keep-alive pings and routing)
+  const latestPosRef = useRef<{ lat: number; lng: number } | null>(null)
+
   const [position, setPosition] = useState<{ lat: number; lng: number } | null>(null)
-  const [sendLocation] = useMutation(HANDLE_RESCUE_VEHICLE_LOCATION);
+  const [sendLocation] = useMutation(HANDLE_RESCUE_VEHICLE_LOCATION)
+
+  const clearRoute = useCallback(() => {
+    if (directionsRendererRef.current) {
+      directionsRendererRef.current.setMap(null)
+      directionsRendererRef.current = null
+    }
+    if (destMarkerRef.current) {
+      destMarkerRef.current.setMap(null)
+      destMarkerRef.current = null
+    }
+  }, [])
+
+  const renderRoute = useCallback((origin: google.maps.LatLngLiteral, destination: google.maps.LatLngLiteral) => {
+    if (!mapInstance.current || !window.google?.maps) return
+
+    // init services once
+    if (!directionsServiceRef.current) {
+      directionsServiceRef.current = new window.google.maps.DirectionsService()
+    }
+    if (!directionsRendererRef.current) {
+      directionsRendererRef.current = new window.google.maps.DirectionsRenderer({ suppressMarkers: true })
+      directionsRendererRef.current.setMap(mapInstance.current)
+    }
+
+    // destination marker
+    if (!destMarkerRef.current) {
+      destMarkerRef.current = new window.google.maps.Marker({
+        map: mapInstance.current,
+        position: destination,
+        icon: {
+          url: '/destination.png', // optional custom icon
+          scaledSize: new window.google.maps.Size(36, 36),
+        },
+        title: 'Request location',
+      })
+    } else {
+      destMarkerRef.current.setPosition(destination)
+    }
+
+    directionsServiceRef.current.route(
+      {
+        origin,
+        destination,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+        provideRouteAlternatives: false,
+      },
+      (result, status) => {
+        if (status === 'OK' && result) {
+          directionsRendererRef.current!.setDirections(result)
+
+          // fit bounds
+          const bounds = new window.google.maps.LatLngBounds()
+          bounds.extend(origin)
+          bounds.extend(destination)
+          mapInstance.current!.fitBounds(bounds, 64)
+        } else {
+          // If routing fails, still ensure the destination marker is visible
+          console.warn('Directions request failed:', status)
+          const bounds = new window.google.maps.LatLngBounds()
+          bounds.extend(origin)
+          bounds.extend(destination)
+          mapInstance.current!.fitBounds(bounds, 64)
+        }
+      }
+    )
+  }, [])
+
+  const transmit = useCallback((lat: number, lng: number) => {
+    setPosition({ lat, lng })
+    latestPosRef.current = { lat, lng }
+
+    if (mapInstance.current) mapInstance.current.setCenter({ lat, lng })
+    if (markerRef.current) markerRef.current.setPosition({ lat, lng })
+
+    // If an offer is active, recompute route from the new origin
+    if (active && offer && latestPosRef.current) {
+      renderRoute(latestPosRef.current, offer)
+    }
+
+    // fire-and-forget mutation
+    sendLocation({
+      variables: {
+        input: {
+          rescueVehicleId,
+          latitude: lat,
+          longitude: lng,
+          address: '' // optional reverse-geocode
+        }
+      }
+    }).catch(err => console.error('Error sending location:', err))
+  }, [rescueVehicleId, sendLocation, active, offer, renderRoute])
 
   const initMap = useCallback(() => {
     if (!mapEl.current || !window.google?.maps) return
 
-    // initialize
+    // init map + marker
     mapInstance.current = new window.google.maps.Map(mapEl.current, {
       center: { lat: 0, lng: 0 },
       zoom: 15,
+      streetViewControl: false,
+      mapTypeControl: false,
     })
 
-    // add marker
     markerRef.current = new window.google.maps.Marker({
       map: mapInstance.current,
       position: { lat: 0, lng: 0 },
       icon: {
-        url: '/marker.png',            
+        url: '/marker.png',
         scaledSize: new window.google.maps.Size(42, 42),
       },
+      title: 'Your vehicle',
     })
 
     if (!navigator.geolocation) {
-      console.warn('Geolocation not supported');
-      return;
+      console.warn('Geolocation not supported')
+      return
     }
 
-    // get initial position and watch updates
     const handleGeo = (pos: GeolocationPosition) => {
-      const { latitude, longitude } = pos.coords;
-      const latlng = { lat: latitude, lng: longitude };
+      const { latitude, longitude } = pos.coords
+      transmit(latitude, longitude)
+    }
 
-      setPosition(latlng);
-      if (mapInstance.current) {
-        mapInstance.current.setCenter(latlng);
-      }
-      if (markerRef.current) {
-        markerRef.current.setPosition(latlng);
-      }
-
-      // send to server
-      sendLocation({
-        variables: {
-          input: {
-            rescueVehicleId,
-            latitude,
-            longitude,
-            address: ''  // or reverse‐geocode here
-          }
-        }
-      }).catch(err => {
-        console.error('Error sending location:', err);
-      });
-    };
+    const handleError = (err: GeolocationPositionError) => {
+      console.warn('Geolocation error:', err)
+      const p = latestPosRef.current
+      if (p) transmit(p.lat, p.lng)
+    }
 
     // initial
-    navigator.geolocation.getCurrentPosition(handleGeo, console.error, {
-      enableHighAccuracy: true
-    });
+    navigator.geolocation.getCurrentPosition(handleGeo, handleError, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 10000,
+    })
 
-    // live updates
-    navigator.geolocation.watchPosition(handleGeo, console.error, {
-      enableHighAccuracy: true
-    });
-  }, [rescueVehicleId, sendLocation]);
+    // continuous updates
+    watchIdRef.current = navigator.geolocation.watchPosition(handleGeo, handleError, {
+      enableHighAccuracy: true,
+      maximumAge: 0,
+      timeout: 10000,
+    })
+
+    // periodic keep-alive reads
+    intervalIdRef.current = window.setInterval(() => {
+      navigator.geolocation.getCurrentPosition(handleGeo, handleError, {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 10000,
+      })
+    }, 9000)
+  }, [transmit])
+
+  // react to offer / active changes
+  useEffect(() => {
+    if (!mapInstance.current) return
+
+    if (active && offer && latestPosRef.current) {
+      // draw route
+      renderRoute(latestPosRef.current, offer)
+    } else {
+      // hide destination + route
+      clearRoute()
+    }
+  }, [active, offer, clearRoute, renderRoute])
+
+  // cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current)
+      if (intervalIdRef.current !== null) clearInterval(intervalIdRef.current)
+      clearRoute()
+    }
+  }, [clearRoute])
 
   return (
     <>
@@ -88,18 +211,7 @@ export default function LiveLocationMap({ rescueVehicleId }: LiveLocationMapProp
         onLoad={initMap}
         onError={() => console.error('Google Maps script failed to load')}
       />
-
-      {/* Fullscreen map */}
-      <div
-        ref={mapEl}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100vw',
-          height: '100vh',
-        }}
-      />
+      <div ref={mapEl} style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh' }} />
     </>
   )
 }
