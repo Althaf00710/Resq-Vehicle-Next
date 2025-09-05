@@ -5,9 +5,14 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useMutation, useSubscription, useQuery } from '@apollo/client';
 import { useRouter } from 'next/navigation';
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
+import { ScanLine, ScanBarcode, Ambulance as AmbulanceIcon, CarFront } from 'lucide-react';
 
 import { ASSIGNMENT_SUBSCRIPTION } from '@/graphql/subscriptions/AssignmentSubscription';
-import { RESPOND_TO_ASSIGNMENT_OFFER, UPDATE_RESCUE_VEHICLE_ASSIGNMENT } from '@/graphql/mutations/AssignmentMutations';
+import {
+  RESPOND_TO_ASSIGNMENT_OFFER,
+  UPDATE_RESCUE_VEHICLE_ASSIGNMENT,
+} from '@/graphql/mutations/AssignmentMutations';
 import { VEHICLE_ASSIGNMENT_QUERY } from '@/graphql/queries/vehicleAssignment';
 
 import AssignmentOfferToast from '@/components-page/home/AssignmentOfferToast';
@@ -17,27 +22,49 @@ import type { Offer } from '@/graphql/types/assignment';
 // Load Maps client-side only
 const LiveLocationMap = dynamic(() => import('@/components-page/home/LiveLocationMap'), { ssr: false });
 
+/* -------------------- LocalStorage helpers -------------------- */
+
 const RV_INFO_KEY = 'resq.rv.info';
-type StoredRV = { id?: number | string; rescueVehicleId?: number | string; vehicleId?: number | string };
+type StoredRV = {
+  id?: number | string;
+  rescueVehicleId?: number | string;
+  vehicleId?: number | string;
+  code?: string;
+  plateNumber?: string;
+  rescueVehicleCategory?: { name?: string | null } | null;
+};
 
-function getVehicleIdFromStorage(): number | null {
-  try {
-    const raw = localStorage.getItem(RV_INFO_KEY);
-    if (!raw) return null;
-    const obj: StoredRV = JSON.parse(raw);
-    const idRaw = obj.id ?? obj.rescueVehicleId ?? obj.vehicleId;
-    if (idRaw == null) return null;
-    const n = typeof idRaw === 'string' ? parseInt(idRaw, 10) : Number(idRaw);
-    return Number.isFinite(n) ? n : null;
-  } catch {
-    return null;
-  }
-}
-
+// tolerant parse (handles numbers/strings)
 function toInt(v: unknown): number | null {
   const n = typeof v === 'string' ? parseInt(v, 10) : Number(v);
   return Number.isFinite(n) ? n : null;
 }
+
+function readRVInfo(): { id: number | null; code?: string; plate?: string; category?: string } {
+  try {
+    const raw = localStorage.getItem(RV_INFO_KEY);
+    if (!raw) return { id: null };
+    const obj: StoredRV = JSON.parse(raw);
+
+    const idRaw = obj.id ?? obj.rescueVehicleId ?? obj.vehicleId;
+    const id = toInt(idRaw);
+
+    return {
+      id,
+      code: obj.code ?? undefined,
+      plate: obj.plateNumber ?? undefined,
+      category: obj.rescueVehicleCategory?.name ?? undefined,
+    };
+  } catch {
+    return { id: null };
+  }
+}
+
+function getVehicleIdFromStorage(): number | null {
+  return readRVInfo().id;
+}
+
+/* -------------------- Page -------------------- */
 
 type RequestLike = {
   id: string | number;
@@ -48,31 +75,55 @@ type RequestLike = {
   proofImageURL?: string | null;
   emergencySubCategory?: { name?: string | null } | null;
   status?: string | null;
+  civilianId?: number | string | null;
+  civilian?: { name?: string | null; phoneNumber?: string | null } | null;
 };
 
 export default function VehicleHomePage() {
   const router = useRouter();
   const [vehicleId, setVehicleId] = useState<number | null>(null);
-  const [offer, setOffer] = useState<Offer | null>(null);
 
-  // Persist after accept
+  // Top-left overlay info from LS
+  const [rvCode, setRvCode] = useState<string | undefined>(undefined);
+  const [rvPlate, setRvPlate] = useState<string | undefined>(undefined);
+  const [rvCategory, setRvCategory] = useState<string | undefined>(undefined);
+
+  // Live offer + accepted assignment state
+  const [offer, setOffer] = useState<Offer | null>(null);
   const [acceptedDest, setAcceptedDest] = useState<{ lat: number; lng: number } | null>(null);
   const [acceptedRequest, setAcceptedRequest] = useState<RequestLike | null>(null);
   const [acceptedAssignmentId, setAcceptedAssignmentId] = useState<number | null>(null);
 
   const expiryTimerRef = useRef<number | null>(null);
 
-  // Init vehicle id or redirect
+  /* ------------ Bootstrap from localStorage (id + overlay fields) ------------ */
+
   useEffect(() => {
-    const id = getVehicleIdFromStorage();
+    const { id, code, plate, category } = readRVInfo();
     if (id == null) {
       router.replace('/vehicle/login');
       return;
     }
     setVehicleId(id);
+    setRvCode(code);
+    setRvPlate(plate);
+    setRvCategory(category);
+
+    // keep overlay in sync if LS changes (e.g., different login)
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== RV_INFO_KEY) return;
+      const next = readRVInfo();
+      setVehicleId(next.id);
+      setRvCode(next.code);
+      setRvPlate(next.plate);
+      setRvCategory(next.category);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
   }, [router]);
 
-  // Live assignment offers
+  /* -------------------- Live assignment offers -------------------- */
+
   const { data: subData } = useSubscription(ASSIGNMENT_SUBSCRIPTION, {
     variables: vehicleId == null ? undefined : { vehicleId },
     skip: vehicleId == null,
@@ -93,10 +144,14 @@ export default function VehicleHomePage() {
 
     const offeredAtMs = new Date(incoming.offeredAt).getTime();
     const endAtMs = offeredAtMs + (incoming.offerTtlSeconds || 15) * 1000;
-    expiryTimerRef.current = window.setTimeout(() => setOffer(null), Math.max(0, endAtMs - Date.now()));
+    expiryTimerRef.current = window.setTimeout(
+      () => setOffer(null),
+      Math.max(0, endAtMs - Date.now())
+    );
   }, [subData]);
 
-  // Query latest assignment (keep card/route after accept)
+  /* -------------------- Query current assignment -------------------- */
+
   const {
     data: assignData,
     refetch: refetchAssignments,
@@ -108,11 +163,10 @@ export default function VehicleHomePage() {
     fetchPolicy: 'network-only',
   });
 
-  // Sync accepted state from latest assignment (ignore cancelled/completed)
   useEffect(() => {
     const list = assignData?.assignments as
       | Array<{
-          id: string | number; // assignment id
+          id: string | number;
           rescueVehicleRequest?: {
             id: string | number;
             status?: string | null;
@@ -122,6 +176,8 @@ export default function VehicleHomePage() {
             description?: string | null;
             proofImageURL?: string | null;
             emergencySubCategory?: { name?: string | null } | null;
+            civilianId?: number | string | null;
+            civilian?: { name?: string | null; phoneNumber?: string | null } | null;
           } | null;
         }>
       | undefined;
@@ -134,7 +190,6 @@ export default function VehicleHomePage() {
 
     const st = (first.status || '').toLowerCase();
     if (st.includes('cancel') || st.includes('complete')) {
-      // It's done — clear local state and stop directions
       setAcceptedAssignmentId(null);
       setAcceptedDest(null);
       setAcceptedRequest(null);
@@ -152,18 +207,21 @@ export default function VehicleHomePage() {
       description: first.description ?? null,
       proofImageURL: first.proofImageURL ?? null,
       emergencySubCategory: first.emergencySubCategory ?? null,
+      civilianId: (first as any)?.civilianId ?? null,
+      civilian: (first as any)?.civilian ?? null,
     });
   }, [assignData]);
 
-  // Poll while an assignment is active
   useEffect(() => {
     if (acceptedDest) startPolling?.(10_000);
     else stopPolling?.();
     return () => stopPolling?.();
   }, [acceptedDest, startPolling, stopPolling]);
 
-  // Accept / Decline
+  /* -------------------- Accept / Decline -------------------- */
+
   const [respond] = useMutation(RESPOND_TO_ASSIGNMENT_OFFER);
+
   const handleRespond = useCallback(
     async (accepted: boolean) => {
       if (!offer || vehicleId == null) return;
@@ -176,7 +234,7 @@ export default function VehicleHomePage() {
         await respond({ variables: { input: { requestId, vehicleId: rvId, accepted } } });
 
         if (accepted) {
-          // Show immediately (prevents flicker before refetch)
+          // prefill using subscription (now includes civilian fields)
           setAcceptedDest({ lat: offer.request.latitude, lng: offer.request.longitude });
           setAcceptedRequest({
             id: offer.request.id,
@@ -187,6 +245,8 @@ export default function VehicleHomePage() {
             description: offer.request.description ?? null,
             proofImageURL: offer.request.proofImageURL ?? null,
             emergencySubCategory: { name: offer.request.emergencySubCategory?.name ?? null },
+            civilianId: offer.request.civilianId ?? null,
+            civilian: offer.request.civilian ?? null,
           });
           setAcceptedAssignmentId(null);
         } else {
@@ -214,6 +274,8 @@ export default function VehicleHomePage() {
                 description: first.description ?? null,
                 proofImageURL: first.proofImageURL ?? null,
                 emergencySubCategory: first.emergencySubCategory ?? null,
+                civilianId: (first as any)?.civilianId ?? null,
+                civilian: (first as any)?.civilian ?? null,
               });
               if (firstRow?.id != null) setAcceptedAssignmentId(Number(firstRow.id));
             }
@@ -226,21 +288,23 @@ export default function VehicleHomePage() {
     [offer, vehicleId, respond, refetchAssignments]
   );
 
-  // Destination for the map
+  /* -------------------- Map destination & state -------------------- */
+
   const destination = useMemo(() => {
     if (offer) return { lat: offer.request.latitude, lng: offer.request.longitude };
     if (acceptedDest) return acceptedDest;
     return null;
   }, [offer, acceptedDest]);
 
-  // Whether directions should be shown
   const isDone = useMemo(() => {
     const st = (acceptedRequest?.status ?? '').toLowerCase();
     return st.includes('complete') || st.includes('cancel');
   }, [acceptedRequest?.status]);
+
   const directionsActive = !!destination && !isDone;
 
-  // Mutations: Arrived / Completed
+  /* -------------------- Mutations: Arrived / Completed -------------------- */
+
   const [updateAssignment] = useMutation(UPDATE_RESCUE_VEHICLE_ASSIGNMENT);
 
   const markArrived = useCallback(async (): Promise<boolean> => {
@@ -272,7 +336,6 @@ export default function VehicleHomePage() {
         },
       });
 
-      // reflect locally
       setAcceptedRequest((prev) => (prev ? { ...prev, status: 'Arrived' } : prev));
       return true;
     } catch (e) {
@@ -310,11 +373,8 @@ export default function VehicleHomePage() {
         },
       });
 
-      // reflect locally and stop directions
       setAcceptedRequest((prev) => (prev ? { ...prev, status: 'Completed' } : prev));
-      setAcceptedDest(null); // ensure directions hide immediately
-      // Optionally, clear everything after a short delay:
-      // setTimeout(() => { setAcceptedRequest(null); setAcceptedAssignmentId(null); }, 1500);
+      setAcceptedDest(null); // hide directions immediately
       return true;
     } catch (e) {
       console.error('Update to Completed failed', e);
@@ -327,31 +387,57 @@ export default function VehicleHomePage() {
     [offer]
   );
 
+  /* -------------------- UI -------------------- */
+
+  const CategoryIcon = (rvCategory || '').toLowerCase().includes('ambulance')
+    ? AmbulanceIcon
+    : CarFront;
+
   return (
     <div className="relative min-h-[100dvh]">
+      {/* Top-left overlay: App logo + vehicle details */}
+      <div className="pointer-events-none fixed left-4 top-4 z-[101] flex flex-col items-start gap-3">
+        <div className="pointer-events-auto p-2">
+          <Image
+            src="/images/App_Logo.png"
+            alt="ResQ"
+            width={120}
+            height={40}
+            className="h-10 w-auto"
+            priority
+          />
+        </div>
+
+        <div className="pointer-events-auto rounded-2xl bg-white/85 p-3 text-sm shadow ring-1 ring-black/10 backdrop-blur-md dark:bg-slate-900/80 dark:text-slate-100 dark:ring-white/10">
+          <div className="flex items-center gap-2">
+            <ScanLine className="h-4 w-4 text-slate-600 dark:text-slate-300" />
+            {/* <span className="font-medium">Code:</span> */}
+            <span className="ml-1">{rvCode ?? '—'}</span>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <ScanBarcode className="h-4 w-4 text-slate-600 dark:text-slate-300" />
+            {/* <span className="font-medium">Plate:</span> */}
+            <span className="ml-1">{rvPlate ?? '—'}</span>
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <CategoryIcon className="h-4 w-4 text-slate-600 dark:text-slate-300" />
+            {/* <span className="font-medium">Category:</span> */}
+            <span className="ml-1 text-blue-500">{rvCategory ?? '—'}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Map */}
       {vehicleId != null && (
-        <LiveLocationMap
-          rescueVehicleId={vehicleId}
-          offer={destination}
-          active={directionsActive} // ← hide directions when completed/cancelled
-        />
+        <LiveLocationMap rescueVehicleId={vehicleId} offer={destination} active={directionsActive} />
       )}
 
-      {/* Offer toast (accept/decline) */}
-      <AssignmentOfferToast
-        key={offerKey}
-        offer={offer}
-        onRespond={handleRespond}
-        soundUrl="/alert.mp3"
-      />
+      {/* Offer toast */}
+      <AssignmentOfferToast key={offerKey} offer={offer} onRespond={handleRespond} soundUrl="/alert.mp3" />
 
-      {/* Accepted card: shows "Completed" after Arrived succeeds */}
+      {/* Active assignment card */}
       {acceptedRequest && (
-        <AssignmentActiveCard
-          request={acceptedRequest}
-          onArrived={markArrived}
-          onCompleted={markCompleted}
-        />
+        <AssignmentActiveCard request={acceptedRequest} onArrived={markArrived} onCompleted={markCompleted} />
       )}
     </div>
   );

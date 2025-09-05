@@ -2,6 +2,17 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Image from 'next/image';
+import {
+  HeartPulse,
+  MapPin,
+  Navigation,
+  FileImage,
+  User as UserIcon,
+  Phone as PhoneIcon,
+  CheckCircle2,
+  XCircle,
+  AlarmClock,
+} from 'lucide-react';
 import type { Offer } from '@/graphql/types/assignment';
 
 type Props = {
@@ -12,10 +23,29 @@ type Props = {
 
 function resolveImageUrl(u?: string | null) {
   if (!u) return null;
-  if (/^https?:\/\//i.test(u)) return u; // already absolute
+  if (/^https?:\/\//i.test(u)) return u;
   const base = (process.env.NEXT_PUBLIC_SERVER_URL || '').replace(/\/+$/, '');
   const path = u.replace(/^\/+/, '');
   return `${base}/${path}`;
+}
+
+function Row({
+  icon,
+  children,
+  className = '',
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`flex items-start gap-2 text-[13px] ${className}`}>
+      <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+        {icon}
+      </span>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
 }
 
 export default function AssignmentOfferToast({ offer, onRespond, soundUrl }: Props) {
@@ -28,22 +58,19 @@ export default function AssignmentOfferToast({ offer, onRespond, soundUrl }: Pro
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const playSound = async () => {
-    if (!offer || offer.isCancelled) return; // no sound on cancel
+    if (!offer || offer.isCancelled) return;
     if (soundUrl && audioRef.current) {
       try {
         audioRef.current.currentTime = 0;
         await audioRef.current.play();
-        return;
       } catch {
-        // ignore autoplay block
+        /* autoplay blocked, ignore */
       }
     }
   };
 
-  // Re-show + restart countdown when offer changes
   useEffect(() => {
     if (!offer || offer.isCancelled) {
-      // hide immediately if no offer OR cancelled
       setVisible(false);
       if (hideTimer.current) window.clearTimeout(hideTimer.current);
       if (tickTimer.current) window.clearInterval(tickTimer.current);
@@ -92,12 +119,16 @@ export default function AssignmentOfferToast({ offer, onRespond, soundUrl }: Pro
   const slideClass = visible ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0';
   if (!offer || offer.isCancelled) return null;
 
-  const address = offer.request.address;
-  const lat = offer.request.latitude;
-  const lng = offer.request.longitude;
-  const desc = offer.request.description;
-  const imgSrc = resolveImageUrl(offer.request.proofImageURL);
-  const catName = offer.request.emergencySubCategory?.name ?? null;
+  const { request } = offer;
+  const address = request.address;
+  const lat = request.latitude;
+  const lng = request.longitude;
+  const desc = request.description;
+  const imgSrc = resolveImageUrl(request.proofImageURL);
+  const catName = request.emergencySubCategory?.name ?? null;
+
+  const civilianName = request.civilian?.name ?? null;
+  const phoneNumber = request.civilian?.phoneNumber ?? null;
 
   return (
     <div
@@ -111,68 +142,99 @@ export default function AssignmentOfferToast({ offer, onRespond, soundUrl }: Pro
         </audio>
       )}
 
-      <div className="rounded-2xl shadow-lg bg-white text-gray-900 dark:bg-neutral-900 dark:text-white overflow-hidden">
-        <div className="px-5 pt-4 pb-3">
+      <div className="overflow-hidden rounded-2xl bg-white text-gray-900 shadow-lg ring-1 ring-black/10 dark:bg-neutral-900 dark:text-white dark:ring-white/10">
+        {/* Header */}
+        <div className="bg-gradient-to-r from-rose-500/90 to-amber-400/90 px-5 pt-4 pb-3 text-white">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">ResQ Request</h3>
-            <span className="text-sm tabular-nums">{secondsLeft}s</span>
+            <h3 className="text-base font-semibold tracking-wide">Emergency Offer</h3>
+            <span className="inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-xs font-semibold">
+              <AlarmClock className="h-4 w-4" />
+              {secondsLeft}s
+            </span>
           </div>
-          <div className="mt-3 h-1 w-full bg-gray-200 dark:bg-neutral-800 rounded-full overflow-hidden">
+          <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-white/30">
             <div
-              className="h-1 bg-blue-600 dark:bg-blue-500 transition-all duration-250"
+              className="h-1 rounded-full bg-white transition-all duration-250"
               style={{ width: `${percentLeft}%` }}
             />
           </div>
         </div>
 
-        <div className="px-5 pb-4 text-sm space-y-1">
+        {/* Details */}
+        <div className="space-y-2 px-5 py-4 text-sm">
           {catName && (
-            <div className="truncate">
-              <span className="font-medium">Emergency:</span> {catName}
-            </div>
+            <Row icon={<HeartPulse className="h-4 w-4" />}>
+              <span className="font-medium">Emergency:</span> <span className="ml-1">{catName}</span>
+            </Row>
           )}
+
           {!!address && (
-            <div className="truncate">
-              <span className="font-medium">Location:</span> {address}
-            </div>
+            <Row icon={<MapPin className="h-4 w-4" />}>
+              <span className="font-medium">Location:</span>{' '}
+              <span className="ml-1 line-clamp-2">{address}</span>
+            </Row>
           )}
-          <div>
-            <span className="font-medium">Coords:</span> {lat.toFixed(5)}, {lng.toFixed(5)}
-          </div>
+
+          <Row icon={<Navigation className="h-4 w-4" />}>
+            <span className="font-medium">Coords:</span>{' '}
+            <span className="ml-1">{lat.toFixed(5)}, {lng.toFixed(5)}</span>
+          </Row>
+
           {!!desc && (
-            <div className="mt-1">
-              <span className="font-medium">Details:</span> {desc}
-            </div>
+            <Row icon={<FileImage className="invisible h-4 w-4" />}>
+              <span className="font-medium">Details:</span> <span className="ml-1">{desc}</span>
+            </Row>
           )}
+
+          {civilianName && (
+            <Row icon={<UserIcon className="h-4 w-4" />}>
+              <span className="font-medium">Civilian:</span> <span className="ml-1">{civilianName}</span>
+            </Row>
+          )}
+
+          {phoneNumber && (
+            <Row icon={<PhoneIcon className="h-4 w-4" />}>
+              <span className="font-medium">Phone:</span>{' '}
+              <a className="ml-1 underline decoration-dotted" href={`tel:${phoneNumber}`}>{phoneNumber}</a>
+            </Row>
+          )}
+
           {!!imgSrc && (
             <div className="mt-2">
-              <span className="font-medium">Proof:</span>
-              <div className="mt-1">
-                <Image
-                  src={imgSrc}
-                  alt="Proof"
-                  width={640}
-                  height={480}
-                  unoptimized
-                  className="rounded-lg max-h-40 w-auto object-contain border border-black/10 dark:border-white/10"
-                />
+              <div className="mb-1 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <FileImage className="h-4 w-4" />
+                Proof
               </div>
+              <Image
+                src={imgSrc}
+                alt="Proof"
+                width={640}
+                height={480}
+                unoptimized
+                className="max-h-40 w-auto rounded-lg border border-black/10 object-contain dark:border-white/10"
+              />
             </div>
           )}
-          <div className="text-xs text-gray-500 mt-1">Offer valid {offer.offerTtlSeconds}s from server time.</div>
+
+          <div className="pt-1 text-xs text-slate-500 dark:text-neutral-400">
+            Offer valid {offer.offerTtlSeconds}s from server time.
+          </div>
         </div>
 
-        <div className="px-5 pb-4 flex items-center gap-3">
+        {/* Actions */}
+        <div className="flex items-center gap-3 px-5 pb-4">
           <button
             onClick={() => onRespond(true)}
-            className="flex-1 rounded-xl px-4 py-2 font-medium bg-green-500 text-white hover:bg-green-700"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 font-semibold text-white shadow-sm transition hover:bg-emerald-700"
           >
+            <CheckCircle2 className="h-5 w-5" />
             Accept
           </button>
           <button
             onClick={() => onRespond(false)}
-            className="flex-1 rounded-xl px-4 py-2 font-medium bg-red-600 text-white hover:bg-red-700"
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2 font-semibold text-white shadow-sm transition hover:bg-rose-700"
           >
+            <XCircle className="h-5 w-5" />
             Decline
           </button>
         </div>

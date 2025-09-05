@@ -1,8 +1,17 @@
-// components-page/home/AssignmentActiveCard.tsx
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useState, useEffect, useMemo  } from 'react';
 import Image from 'next/image';
+import {
+  HeartPulse,
+  MapPin,
+  Navigation,
+  FileImage,
+  User as UserIcon,
+  Phone as PhoneIcon,
+  Route,
+  BadgeCheck,
+} from 'lucide-react';
 
 type RequestLike = {
   id: string | number;
@@ -12,24 +21,47 @@ type RequestLike = {
   description?: string | null;
   proofImageURL?: string | null;
   emergencySubCategory?: { name?: string | null } | null;
-  status?: string | null; // optional: if provided, we reflect it
+  status?: string | null;
+
+  // NEW (optional) – shown if present
+  civilianId?: number | string | null;
+  civilian?: { name?: string | null; phoneNumber?: string | null } | null;
 };
 
 type Props = {
   request: RequestLike | null;
   /** Return true if status was updated to Arrived successfully */
   onArrived: () => boolean | Promise<boolean>;
-  /** Optional: called when user taps "Completed" after Arrived */
+  /** Called when user taps "Completed" after Arrived */
   onCompleted?: () => void | Promise<void>;
   className?: string;
 };
 
 function resolveImageUrl(u?: string | null) {
   if (!u) return null;
-  if (/^https?:\/\//i.test(u)) return u; // absolute already
+  if (/^https?:\/\//i.test(u)) return u;
   const base = (process.env.NEXT_PUBLIC_SERVER_URL || '').replace(/\/+$/, '');
   const path = u.replace(/^\/+/, '');
   return `${base}/${path}`;
+}
+
+function Row({
+  icon,
+  children,
+  className = '',
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`flex items-start gap-2 text-sm ${className}`}>
+      <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+        {icon}
+      </span>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
 }
 
 export default function AssignmentActiveCard({
@@ -40,14 +72,12 @@ export default function AssignmentActiveCard({
 }: Props) {
   if (!request) return null;
 
-  // Reflect "Arrived" either from the incoming status prop or from a successful click
   const [arrived, setArrived] = useState<boolean>(() =>
     /arriv/i.test(request.status ?? '')
   );
   const [arriving, setArriving] = useState(false);
   const [completing, setCompleting] = useState(false);
 
-  // Keep local "arrived" in sync if parent updates status later
   useEffect(() => {
     const isArrived = /arriv/i.test(request.status ?? '');
     setArrived(isArrived);
@@ -60,6 +90,9 @@ export default function AssignmentActiveCard({
   const imgSrc = resolveImageUrl(request.proofImageURL);
   const catName = request.emergencySubCategory?.name ?? null;
 
+  const civilianName = request.civilian?.name ?? null;
+  const phoneNumber = request.civilian?.phoneNumber ?? null;
+
   const idText = useMemo(() => `#${String(request.id)}`, [request.id]);
 
   const handleArrivedClick = async () => {
@@ -69,7 +102,7 @@ export default function AssignmentActiveCard({
       const ok = await Promise.resolve(onArrived());
       if (ok) setArrived(true);
     } catch {
-      // ignore — parent can show a toast/snackbar
+      /* parent can toast error */
     } finally {
       setArriving(false);
     }
@@ -94,85 +127,105 @@ export default function AssignmentActiveCard({
       ].join(' ')}
       aria-live="polite"
     >
-      <div className="rounded-2xl shadow-lg bg-white text-gray-900 dark:bg-neutral-900 dark:text-white overflow-hidden ring-1 ring-black/10 dark:ring-white/10">
+      <div className="overflow-hidden rounded-2xl bg-white text-gray-900 shadow-lg ring-1 ring-black/10 dark:bg-neutral-900 dark:text-white dark:ring-white/10">
         {/* Header */}
-        <div className="px-5 pt-4 pb-3">
+        <div className="bg-gradient-to-r from-indigo-500/90 to-cyan-500/90 px-5 pt-4 pb-3 text-white">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">ResQ Assignment</h3>
-            <span className="text-xs text-gray-500 dark:text-neutral-400">{idText}</span>
+            <h3 className="text-base font-semibold">Active Assignment</h3>
+            <span className="text-xs font-semibold opacity-95">{idText}</span>
           </div>
           {request.status && (
-            <div className="mt-1 text-xs text-gray-500 dark:text-neutral-400">
-              Status: <span className="font-medium">{request.status}</span>
+            <div className="mt-1 text-[11px] opacity-90">
+              Status: <span className="font-semibold">{request.status}</span>
             </div>
           )}
         </div>
 
         {/* Details */}
-        <div className="px-5 pb-4 text-sm space-y-1">
+        <div className="space-y-2 px-5 py-4">
           {catName && (
-            <div className="truncate">
-              <span className="font-medium">Emergency:</span> {catName}
-            </div>
+            <Row icon={<HeartPulse className="h-4 w-4" />}>
+              <span className="font-medium">Emergency:</span> <span className="ml-1">{catName}</span>
+            </Row>
           )}
           {!!address && (
-            <div className="truncate">
-              <span className="font-medium">Location:</span> {address}
-            </div>
+            <Row icon={<MapPin className="h-4 w-4" />}>
+              <span className="font-medium">Location:</span>{' '}
+              <span className="ml-1 line-clamp-2">{address}</span>
+            </Row>
           )}
-          <div>
-            <span className="font-medium">Coords:</span> {lat.toFixed(5)}, {lng.toFixed(5)}
-          </div>
+          <Row icon={<Navigation className="h-4 w-4" />}>
+            <span className="font-medium">Coords:</span>{' '}
+            <span className="ml-1">{lat.toFixed(5)}, {lng.toFixed(5)}</span>
+          </Row>
           {!!desc && (
-            <div className="mt-1">
-              <span className="font-medium">Details:</span> {desc}
-            </div>
+            <Row icon={<FileImage className="invisible h-4 w-4" />}>
+              <span className="font-medium">Details:</span> <span className="ml-1">{desc}</span>
+            </Row>
           )}
+
+          {/* Civilian (optional) */}
+          {civilianName && (
+            <Row icon={<UserIcon className="h-4 w-4" />}>
+              <span className="font-medium">Civilian:</span> <span className="ml-1">{civilianName}</span>
+            </Row>
+          )}
+          {phoneNumber && (
+            <Row icon={<PhoneIcon className="h-4 w-4" />}>
+              <span className="font-medium">Phone:</span>{' '}
+              <a className="ml-1 underline decoration-dotted" href={`tel:${phoneNumber}`}>{phoneNumber}</a>
+            </Row>
+          )}
+
           {!!imgSrc && (
-            <div className="mt-2">
-              <span className="font-medium">Proof:</span>
-              <div className="mt-1">
-                <Image
-                  src={imgSrc}
-                  alt="Proof"
-                  width={640}
-                  height={480}
-                  unoptimized
-                  className="rounded-lg max-h-40 w-auto object-contain border border-black/10 dark:border-white/10"
-                />
+            <div className="pt-1">
+              <div className="mb-1 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                <FileImage className="h-4 w-4" />
+                Proof
               </div>
+              <Image
+                src={imgSrc}
+                alt="Proof"
+                width={640}
+                height={480}
+                unoptimized
+                className="max-h-40 w-auto rounded-lg border border-black/10 object-contain dark:border-white/10"
+              />
             </div>
           )}
         </div>
 
         {/* Actions */}
-        <div className="px-5 pb-4 flex items-center gap-3">
-          <button
-            onClick={handleArrivedClick}
-            disabled={arriving || arrived}
-            className={[
-              'flex-1 rounded-xl px-4 py-2 font-medium text-white transition-colors',
-              arrived
-                ? 'bg-green-600 cursor-default'
-                : 'bg-orange-500 hover:bg-orange-700',
-              arriving ? 'opacity-70' : '',
-            ].join(' ')}
-          >
-            {arrived ? 'Arrived' : arriving ? 'Marking…' : 'Destination Arrived'}
-          </button>
+        <div className="flex items-center gap-3 px-5 pb-4">
+          {/* If not arrived yet, show ONLY the Arrived button */}
+          {!arrived && (
+            <button
+              onClick={handleArrivedClick}
+              disabled={arriving}
+              className={[
+                'flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 font-semibold text-white transition-colors',
+                'bg-orange-500 hover:bg-orange-600',
+                arriving ? 'opacity-70' : '',
+              ].join(' ')}
+            >
+              <Route className="h-5 w-5" />
+              {arriving ? 'Marking…' : 'Destination Arrived'}
+            </button>
+          )}
 
-          {/* Show "Completed" ONLY after Arrived succeeds */}
+          {/* After Arrived succeeds, hide Arrived button and show ONLY Completed */}
           {arrived && (
             <button
               onClick={handleCompletedClick}
               disabled={!onCompleted || completing}
               className={[
-                'flex-1 rounded-xl px-4 py-2 font-medium text-white transition-colors',
+                'flex-1 inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 font-semibold text-white transition-colors',
                 onCompleted ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-gray-400 cursor-not-allowed',
                 completing ? 'opacity-70' : '',
               ].join(' ')}
               title={onCompleted ? '' : 'Missing onCompleted handler'}
             >
+              <BadgeCheck className="h-5 w-5" />
               {completing ? 'Completing…' : 'Completed'}
             </button>
           )}

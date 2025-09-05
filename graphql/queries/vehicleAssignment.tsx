@@ -16,6 +16,11 @@ query OngoingByVehicle($rescueVehicleId: Int!) {
         name
       }
       proofImageURL
+      civilianId
+      civilian {
+          name
+          phoneNumber
+      }
     }
   }
 }
