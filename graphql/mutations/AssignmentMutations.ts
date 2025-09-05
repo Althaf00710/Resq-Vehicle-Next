@@ -7,4 +7,25 @@ export const RESPOND_TO_ASSIGNMENT_OFFER = gql`
             message
         }
     }
-`
+`;
+
+export const UPDATE_RESCUE_VEHICLE_ASSIGNMENT = gql`
+  mutation UpdateRescueVehicleAssignment($id: Int!, $status: String!) {
+    updateRescueVehicleAssignment(id: $id, input: { status: $status }) {
+      success
+      message
+      rescueVehicleAssignment {
+        id
+        arrivalTime
+        departureTime
+        durationMinutes
+        rescueVehicleRequest {
+          id
+          status
+          createdAt
+        }
+      }
+    }
+  }
+`;
+

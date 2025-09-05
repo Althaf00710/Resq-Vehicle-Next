@@ -15,6 +15,11 @@ subscription AssignmentOffered($vehicleId: Int!) {
       emergencySubCategory {
         name
       }
+      civilianId
+      civilian {
+        name
+        phoneNumber
+      }
     }
     isCancelled
     offeredAt
